@@ -18,8 +18,9 @@ import org.scalatest.FunSuite
 import org.scalatest.junit.JUnitRunner
 import org.junit.runner.RunWith
 import org.scalatest.prop.Checkers
-import breeze.math.{TensorSpace, TensorSpaceTestBase}
+import breeze.math.{MutableCoordinateField, MutableVectorField, VectorField, TensorSpaceTestBase}
 import org.scalacheck.Arbitrary
+import breeze.stats.mean
 
 /**
  * @author dlwh
@@ -75,12 +76,19 @@ class CounterTest extends FunSuite with Checkers {
     assert(a === b)
     assert(a === c)
   }
+
+  test("Counter inplace operations") {
+    import breeze.numerics._
+    val x = Counter(1 -> 1.0, 2 -> 2.0)
+    log.inPlace(x)
+    assert(x === Counter(1 -> log(1.0), 2 -> log(2.0)))
+  }
 }
 
 
 @RunWith(classOf[JUnitRunner])
 class CounterOps_IntTest extends TensorSpaceTestBase[Counter[Int, Int], Int, Int] {
- val space: TensorSpace[Counter[Int, Int], Int, Int] = implicitly
+ val space = Counter.space[Int,Int]
 
   val N = 30
   def genTriple: Arbitrary[(Counter[Int, Int], Counter[Int, Int], Counter[Int, Int])] = {

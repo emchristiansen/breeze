@@ -1,5 +1,7 @@
 package breeze.math
 
+import breeze.linalg
+
 /*
  Copyright 2012 David Hall
 
@@ -24,24 +26,19 @@ trait Ring[@specialized(Int,Short,Long,Float,Double) V] extends Semiring[V]  {
 
   def -(a : V, b : V) : V
   def negate(s: V): V = this.-(zero, s)
+  def %(a: V, b: V): V
 
-  /** Returns true if this is a primitive type. */
-  def isPrimitive : Boolean =
-    ! (manifest <:< implicitly[Manifest[AnyRef]])
-
-  /** Returns the norm of this value, the absolute value as a Double. */
-  def norm(a : V) : Double
-
-  /** Returns true if this is not a number. */
-  def isNaN(a : V) : Boolean
-
+  implicit val normImpl: linalg.norm.Impl[V,Double]
+  def sNorm(a: V): Double = linalg.norm(a)
 }
 
 object Ring {
   import Field._
-  implicit val ringD: Ring[Double] = fieldD
+  implicit val ringD: Ring[Double] = fieldDouble
   implicit val ringFloat: Ring[Float] = fieldFloat
   implicit val ringInt: Ring[Int] = fieldInt
   implicit val ringLong: Ring[Long] = fieldLong
+  implicit val ringBigInt: Ring[BigInt] = fieldBigInt
   implicit val ringShort: Ring[Short] = fieldShort
+  implicit val ringComplex: Ring[Complex] = Complex.scalar
 }

@@ -21,14 +21,6 @@ import org.junit.runner.RunWith
 
 @RunWith(classOf[JUnitRunner])
 class Counter2Test extends FunSuite with Checkers {
-  def typeOf[X](value : X)(implicit m : scala.reflect.Manifest[X]) =
-    m.toString
-  def show[X](value : X)(implicit m : scala.reflect.Manifest[X]) = {
-    println(typeOf(value) + ":")
-    println(value)
-    println()
-  }
-
   test("Getting and setting") {
     val x = Counter2[String,Int,Double]()
     x("a",1) = 3.0
@@ -37,32 +29,6 @@ class Counter2Test extends FunSuite with Checkers {
 
     assert(x.valuesIterator.toSet === Set(3.0,8.0,7.75))
   }
-
-  /*
-  test("Transpose") {
-    val x = Counter2[String,Int,Double]()
-    x(("a",1),("b",2),("c",2)) := List(3.0,7.75,8.0)
-
-    assert(x.t.valuesIterator.toSet === Set(3.0,0.0, 0.0, 0.0, 8.0,7.75))
-    assert(x.t.t === x)
-    assert(x.t.t eq x)
-
-    x.t(2,"a") = 1
-    assert(x("a",2) === 1)
-  }
-
-  test("Slice table") {
-    val x= Counter2[String,Int,Double]()
-    x(("a",1),("b",2),("c",2)) := List(3.0,7.75,8.0)
-
-    val table = x(List("a","b","c"),List(1,2))
-
-    assert(table.domain === TableDomain(3,2))
-
-    table(1,0) = 5
-    assert(x("b",1) === 5)
-  }
-  */
 
   test("Slice rows and columns") {
 //    val x = Counter2[String,Int,Double]()
@@ -81,7 +47,7 @@ class Counter2Test extends FunSuite with Checkers {
 
     // require expected static type
     val s2 : Counter[String,Double] = x(::,2)
-    assert(s2.toMap === Map("a" -> 0.0, "b" -> 7.75, "c" -> 8.0))
+    assert(s2.toMap === Map("b" -> 7.75, "c" -> 8.0))
 
     // write-through
     s2("a") = 1
@@ -90,7 +56,6 @@ class Counter2Test extends FunSuite with Checkers {
     assert(s2("a") === 3.0)
   }
 
-  /*
   test("Addition") {
     // require expected static type
     val v1 : Counter2[String,String,Int] =
@@ -121,16 +86,34 @@ class Counter2Test extends FunSuite with Checkers {
     assert(Counter2(("a","a",3)) :* Counter2(("a","a",1),("b","b",2)) === Counter2(("a","a",3)))
   }
 
-  test("Shaped Multiplication") {
+  test("Shaped Multiplication: C2/C2") {
     assert(Counter2((0,'a',1),(1,'a',2),(1,'b',3)) * Counter2(('a',0,1),('b',0,2)) ===
       Counter2((0,0,1),(1,0,8)))
+
+
   }
-  */
+
+  test("Shaped Multiplication: C2/C1") {
+    assert(Counter2((0,'a',1),(1,'a',2),(1,'b',3)) * Counter(('a',1),('b',2)) ===
+      Counter((0,1),(1,8)))
+  }
+
+  test("Shaped Transpose Multiplication C2/C2") {
+    val a = Counter2((0,'a',1),(1,'a',2),(1,'b',3))
+    val b = Counter2(('a',0,1),('b',0,2))
+    assert( (b.t * a.t).t === a * b)
+  }
+
+  test("Shaped Transpose Multiplication: C1/C2") {
+    val a = Counter2((0, 'a', 1), (1, 'a', 2), (1, 'b', 3))
+    val b = Counter(('a', 1), ('b', 2))
+    assert( (b.t * a.t).t === (a * b))
+  }
 
 
   test("sum") {
-    assert(sum(Counter2((1,'a,1.0),(1, 'b, 3.0), (2, 'a, 2.0), (2, 'b, 4.0)), Axis._0) === Counter('a -> 3., 'b -> 7.))
-    assert(sum(Counter2((1,'a,1.0),(1, 'b, 3.0), (2, 'a, 2.0), (2, 'b, 4.0)), Axis._1) === Counter(1 -> 4., 2 -> 6.))
+    assert(sum(Counter2((1,'a,1.0),(1, 'b, 3.0), (2, 'a, 2.0), (2, 'b, 4.0)), Axis._0) === Counter('a -> 3.0, 'b -> 7.0))
+    assert(sum(Counter2((1,'a,1.0),(1, 'b, 3.0), (2, 'a, 2.0), (2, 'b, 4.0)), Axis._1) === Counter(1 -> 4.0, 2 -> 6.0))
   }
 
   test("normalize Rows and columns") {
@@ -138,6 +121,10 @@ class Counter2Test extends FunSuite with Checkers {
       Counter2((1,'a,1.0/3.0),(1, 'b, 3.0/7.0), (2, 'a, 2.0/3.0), (2, 'b, 4.0/7.0)) )
     assert(normalize(Counter2((1,'a,1.0),(1, 'b, 3.0), (2, 'a, 2.0), (2, 'b, 4.0)), Axis._1, 1) ===
       Counter2((1,'a,1.0/4.0),(1, 'b, 3.0/4.0), (2, 'a, 2.0/6.0), (2, 'b, 4.0/6.0)) )
+  }
+
+  test("ufuncs") {
+    breeze.numerics.exp(Counter2((1, 2, 3.0)))
   }
 
 

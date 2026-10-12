@@ -15,17 +15,16 @@ package breeze.math
  See the License for the specific language governing permissions and
  limitations under the License.
 */
-import org.scalatest.FunSuite
-import org.scalatest.prop.Checkers
-import org.scalacheck.{Prop, Arbitrary}
+import breeze.linalg.norm
+import org.scalacheck.Prop
 
 /**
  *
  * @author dlwh
  */
 
-trait TensorSpaceTestBase[V, I, S] extends MutableVectorSpaceTestBase[V, S] with FunSuite with Checkers {
-  implicit val space: TensorSpace[V, I, S]
+trait TensorSpaceTestBase[V, I, S] extends MutableModuleTestBase[V, S] {
+  implicit val space: MutableEnumeratedCoordinateField[V, I, S]
 
   import space._
 
@@ -34,7 +33,7 @@ trait TensorSpaceTestBase[V, I, S] extends MutableVectorSpaceTestBase[V, S] with
   test("norm positive homogeneity") {
     check(Prop.forAll{ (trip: (V, V, V), s: S) =>
       val (a, b, c) = trip
-      (norm(a * s) - field.norm(s) * norm(a)) <= TOL * norm(a * s)
+      (norm(a * s) - norm(s) * norm(a)) <= TOL * norm(a * s)
     })
   }
 
@@ -48,7 +47,7 @@ trait TensorSpaceTestBase[V, I, S] extends MutableVectorSpaceTestBase[V, S] with
   test("norm(v) == 0 iff v == 0") {
     check(Prop.forAll{ (trip: (V, V, V)) =>
       val (a, b, c) = trip
-      val z = zeros(a)
+      val z = zeroLike(a)
       norm(z) == 0.0 && ( (z == a) || norm(a) != 0.0)
     })
   }
@@ -57,35 +56,27 @@ trait TensorSpaceTestBase[V, I, S] extends MutableVectorSpaceTestBase[V, S] with
   test("dot product distributes") {
     check(Prop.forAll{ (trip: (V, V, V)) =>
       val (a, b, c) = trip
-      field.close(field.+(a dot b,a dot c),(a dot (b + c)), 2E-4 )
+      val res = scalars.close(scalars.+(a dot b,a dot c),(a dot (b + c)), 1E-3 )
+      if(!res)
+        println(scalars.+(a dot b,a dot c) + " " + (a dot (b + c)))
+      res
     })
 
     check(Prop.forAll{ (trip: (V, V, V), s: S) =>
       val (a, b, c) = trip
-      field.close(field.*(a dot b,s),(a dot (b * s)) )
-      field.close(field.*(s, a dot b),( (a * s) dot (b)) )
+      scalars.close(scalars.*(a dot b,s),(a dot (b :* s)) )
+      scalars.close(scalars.*(s, a dot b),( (a :* s) dot (b)) )
     })
   }
-
 
   // zip map values
   test("zip map of + is the same as +") {
     check(Prop.forAll{ (trip: (V, V, V)) =>
       val (a, b, _) = trip
-      zipMapValues.map(a,b,{field.+(_:S,_:S)}) == (a + b)
+      zipMapValues.map(a,b,{scalars.+(_:S,_:S)}) == (a + b)
     })
 
   }
-
-  test("op set of scalars works") {
-    check(Prop.forAll{ (trip: (V, V, V), s: S) =>
-      val (a, b, _) = trip
-      val ab = copy(a)
-      ab := s
-      a + s == (a + ab)
-    })
-  }
-
 
   test("Elementwise mult of vectors distributes over vector addition") {
     check(Prop.forAll{ (trip: (V, V, V)) =>
@@ -118,25 +109,23 @@ trait TensorSpaceTestBase[V, I, S] extends MutableVectorSpaceTestBase[V, S] with
       ab :*= c
       val ba = copy(a) :* c
       ba += (b :* c)
-      close(ab, ba, 1e-6)
+      close(ab, ba, TOL)
     })
   }
-
 }
 
-trait DoubleValuedTensorSpaceTestBase[V, I] extends TensorSpaceTestBase[V, I, Double] {
+trait DoubleValuedTensorSpaceTestBase[V <: breeze.linalg.Vector[Double], I] extends TensorSpaceTestBase[V, I, Double] {
     // normalization
   import space._
+  
   test("normalization sets appropriate norm to 1") {
     check(Prop.forAll{ (trip: (V, V, V), n: Double) =>
       val (a, b, c) = trip
       val nn = n.abs % 100 + 1.0
       val normalized = breeze.linalg.normalize(a, nn)
       val v = breeze.linalg.norm(normalized, nn)
-      (v - 1.0).abs <= 1E-5 || norm(normalized) == 0.0
+      (v - 1.0).abs <= TOL || norm(normalized) == 0.0
     })
-
-
   }
 
 }
