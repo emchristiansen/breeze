@@ -16,32 +16,33 @@ package breeze.linalg
 */
 
 import scala.{specialized=>spec}
-import breeze.storage.{DefaultArrayValue, Storage}
-import org.netlib.blas.Dgemm
+import breeze.storage.Zero
 import breeze.util.Terminal
-import support.LiteralRow
-import util.Random
-import breeze.generic.CanMapValues
-import breeze.math.Semiring
+import breeze.linalg.support._
+import breeze.math._
+import breeze.linalg.operators._
+import scala.reflect.ClassTag
+import scala.annotation.unchecked.uncheckedVariance
+import breeze.stats.distributions.Rand
 
 /**
  *
  * @author dlwh
  */
-trait MatrixLike[@spec(Int, Float, Double) E, +Self <: Matrix[E]] extends Tensor[(Int, Int), E] with TensorLike[(Int, Int), E, Self] {
-  def map[E2, That](fn: E=>E2)(implicit canMapValues: CanMapValues[Self, E, E2, That]):That = values map fn
+trait MatrixLike[@spec(Double, Int, Float, Long) V, +Self  <: Matrix[V]] extends Tensor[(Int, Int), V] with TensorLike[(Int, Int), V, Self] {
+  def map[V2, That](fn: V=>V2)(implicit canMapValues: CanMapValues[Self @uncheckedVariance , V, V2, That]):That = values map fn
 
 }
 
-trait Matrix[@spec(Int, Float, Double) E] extends MatrixLike[E, Matrix[E]] {
+trait Matrix[@spec(Double, Int, Float, Long) V] extends MatrixLike[V, Matrix[V]] {
 
   final def apply(i: (Int, Int)) = apply(i._1, i._2)
-  final def update(i: (Int, Int), e: E) {
+  final def update(i: (Int, Int), e: V): Unit = {
     update(i._1, i._2, e)
   }
 
-  def apply(i: Int, j: Int):E
-  def update(i: Int, j: Int, e: E)
+  def apply(i: Int, j: Int): V
+  def update(i: Int, j: Int, e: V): Unit
 
   def size = rows * cols
   def rows: Int
@@ -65,8 +66,9 @@ trait Matrix[@spec(Int, Float, Double) E] extends MatrixLike[E, Matrix[E]] {
   def toString(maxLines : Int = Terminal.terminalHeight - 3,
                maxWidth : Int = Terminal.terminalWidth) : String = {
     val showRows = if (rows > maxLines) maxLines - 1 else rows
+
     def colWidth(col : Int) =
-      (0 until showRows).map(row => this(row,col).toString.length+2).max
+      if (showRows > 0) (0 until showRows).map(row => if(this(row,col)!=null) this(row,col).toString.length+2 else 3).max else 0
 
     val colWidths = new scala.collection.mutable.ArrayBuffer[Int]
     var col = 0
@@ -89,7 +91,7 @@ trait Matrix[@spec(Int, Float, Double) E] extends MatrixLike[E, Matrix[E]] {
 
     val rv = new scala.StringBuilder
     for (row <- 0 until showRows; col <- 0 until colWidths.length) {
-      val cell = this(row,col).toString
+      val cell = if (this(row,col)!=null) this(row,col).toString else "--"
       rv.append(cell)
       rv.append(" " * (colWidths(col) - cell.length))
       if (col == colWidths.length - 1) {
@@ -119,26 +121,61 @@ trait Matrix[@spec(Int, Float, Double) E] extends MatrixLike[E, Matrix[E]] {
 
   override def toString : String = toString(Terminal.terminalHeight, Terminal.terminalWidth)
 
-  def toDenseMatrix(implicit cm: ClassManifest[E], dfv: DefaultArrayValue[E]) = {
+  def toDenseMatrix(implicit cm: ClassTag[V], zero: Zero[V]) = {
     DenseMatrix.tabulate(rows, cols){ (i,j) => apply(i, j)}
   }
+
+  def copy: Matrix[V]
+
+  def flatten(view: View=View.Prefer): Vector[V]
 
 }
 
 object Matrix extends MatrixConstructors[Matrix]
-                      with MatrixMultOps_Double
-                      with MatrixMultOps_Float
-                      with MatrixMultOps_Int {
-  def zeros[@specialized(Int, Float, Double) V: ClassManifest:DefaultArrayValue](rows: Int, cols: Int): Matrix[V] = DenseMatrix.zeros(rows, cols)
+                      with MatrixGenericOps
+                      with MatrixOpsLowPrio
+                      with MatrixOps
+                      with MatrixMultOps {
 
-  def create[@specialized(Int, Float, Double) V:DefaultArrayValue](rows: Int, cols: Int, data: Array[V]): Matrix[V] = DenseMatrix.create(rows, cols, data)
+  def zeros[@spec(Double, Int, Float, Long) V: ClassTag:Zero](rows: Int, cols: Int): Matrix[V] = DenseMatrix.zeros(rows, cols)
 
-  // slicing
+  def create[@spec(Double, Int, Float, Long) V:Zero](rows: Int, cols: Int, data: Array[V]): Matrix[V] = DenseMatrix.create(rows, cols, data)
+
+  private[linalg] def zeroRows[V:ClassTag](cols: Int):Matrix[V] = emptyMatrix(0, cols)
+  private[linalg] def zeroCols[V:ClassTag](rows: Int):Matrix[V] = emptyMatrix(rows, 0)
+
+
+  private[linalg] def emptyMatrix[V:ClassTag](_rows: Int, _cols: Int):Matrix[V] = new Matrix[V] {
+    def activeIterator: Iterator[((Int, Int), V)] = Iterator.empty
+
+    def activeValuesIterator: Iterator[V] = Iterator.empty
+
+    def activeKeysIterator: Iterator[(Int, Int)] = Iterator.empty
+
+    def apply(i: Int, j: Int): V = throw new IndexOutOfBoundsException("Empty matrix!")
+
+    def update(i: Int, j: Int, e: V) {
+      throw new IndexOutOfBoundsException("Empty matrix!")
+    }
+
+    def rows: Int = _rows
+
+    def cols: Int = _cols
+
+    def copy: Matrix[V] = this
+
+    def activeSize: Int = 0
+
+    def repr: Matrix[V] = this
+
+    def flatten(view: View) = Vector[V]()
+  }
 }
 
-trait MatrixConstructors[Vec[T]<:Matrix[T]] {
-  def zeros[@specialized(Int, Float, Double) V:ClassManifest:DefaultArrayValue](rows: Int, cols: Int):Vec[V]
-  def create[@specialized(Int, Float, Double) V:DefaultArrayValue](rows: Int, cols: Int, data: Array[V]):Vec[V]
+
+trait MatrixConstructors[Mat[T]<:Matrix[T]] {
+  def zeros[@spec(Double, Int, Float, Long) V:ClassTag:Zero](rows: Int, cols: Int):Mat[V]
+  def create[@spec(Double, Int, Float, Long) V:Zero](rows: Int, cols: Int, data: Array[V]):Mat[V]
 
   /**
    * Creates a matrix of all ones.
@@ -147,12 +184,12 @@ trait MatrixConstructors[Vec[T]<:Matrix[T]] {
    * @tparam V
    * @return
    */
-  def ones[@specialized(Int, Float, Double) V:ClassManifest:DefaultArrayValue:Semiring](rows: Int, cols: Int):Vec[V] = {
+  def ones[@spec(Double, Int, Float, Long) V:ClassTag:Zero:Semiring](rows: Int, cols: Int):Mat[V] = {
     fill(rows,cols)(implicitly[Semiring[V]].one)
   }
 
-  def fill[@spec(Double, Int, Float) V:ClassManifest:DefaultArrayValue](rows: Int, cols: Int)(v: =>V):Vec[V] = create(rows, cols, Array.fill(rows * cols)(v))
-  def tabulate[@spec(Double, Int, Float) V:ClassManifest:DefaultArrayValue](rows: Int, cols: Int)(f: (Int,Int)=>V):Vec[V]= {
+  def fill[@spec(Double, Int, Float, Long) V:ClassTag:Zero](rows: Int, cols: Int)(v: =>V):Mat[V] = create(rows, cols, Array.fill(rows * cols)(v))
+  def tabulate[@spec(Double, Int, Float, Long) V:ClassTag:Zero](rows: Int, cols: Int)(f: (Int,Int)=>V):Mat[V]= {
     val z = zeros(rows, cols)
     for(c <- 0 until cols; r <- 0 until rows) {
       z(r, c) = f(r, c)
@@ -160,19 +197,39 @@ trait MatrixConstructors[Vec[T]<:Matrix[T]] {
     z
   }
 
-  def rand(rows: Int, cols: Int, rand: Random = new Random()) = {
-    fill(rows, cols)(rand.nextDouble())
+  def rand[T:ClassTag:Zero](rows: Int, cols: Int, rand: Rand[T] = Rand.uniform): Mat[T] = {
+    fill(rows, cols)(rand.draw())
   }
 
+  // @specialized() R because of https://issues.scala-lang.org/browse/SI-8886
   /** Static constructor for a literal matrix. */
-  def apply[R,@specialized(Int, Float, Double) V](rows : R*)(implicit rl : LiteralRow[R,V], man : ClassManifest[V], df: DefaultArrayValue[V]) = {
+  def apply[@specialized(/* Don't remove until SI-8886 is closed*/) R,
+            @spec(Double, Int, Float, Long) V](rows : R*)(implicit rl : LiteralRow[R,V], man : ClassTag[V], zero: Zero[V]) = {
     val nRows = rows.length
     val ns = rl.length(rows(0))
     val rv = zeros(nRows, ns)
+    finishLiteral(rv, rl, rows)
+    rv
+  }
+
+  implicit def canCreateZeros[T:ClassTag:Zero]: CanCreateZeros[Mat[T],(Int,Int)] =
+    new CanCreateZeros[Mat[T],(Int,Int)] {
+      def apply(dims: (Int,Int)): Mat[T] = {
+        zeros[T](dims._1,dims._2)
+      }
+    }
+
+  implicit def canTabulate[T:ClassTag:Zero] = new CanTabulate[(Int,Int),Mat[T],T] {
+    def apply(d: (Int, Int), f: ((Int, Int)) => T): Mat[T] = tabulate[T](d._1,d._2)((r: Int, c: Int) => f((r,c)))
+  }
+
+
+  // This method only exists because of trouble in Scala-specialization land.
+  // basically, we turn off specialization for this loop, since it's not going to be fast anyway.
+  private def finishLiteral[V, R](rv: Matrix[V], rl : LiteralRow[R,V], rows: Seq[R]) {
     for ((row,i) <- rows.zipWithIndex) {
       rl.foreach(row, {(j, v) => rv(i,j) = v})
     }
-    rv
   }
 
 }

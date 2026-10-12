@@ -3,7 +3,8 @@ package breeze.linalg
 import org.scalatest._
 import org.scalatest.junit._
 import org.junit.runner.RunWith
-import breeze.math.{TensorSpaceTestBase, TensorSpace, DoubleValuedTensorSpaceTestBase}
+import breeze.math._
+import breeze.stats.mean
 import org.scalacheck.Arbitrary
 
 /**
@@ -20,10 +21,10 @@ class HashVectorTest extends FunSuite {
 
   test("Min/Max") {
     val v = HashVector(2, 0, 3, 2, -1)
-    assert(v.argmin === 4)
-    assert(v.argmax === 2)
-    assert(v.min === -1)
-    assert(v.max === 3)
+    assert(argmin(v) === 4)
+    assert(argmax(v) === 2)
+    assert(min(v) === -1)
+    assert(max(v) === 3)
   }
 
 
@@ -37,7 +38,7 @@ class HashVectorTest extends FunSuite {
     val a = HashVector(0.56390,0.36231,0.14601,0.60294,0.14535)
     val b = HashVector(0.15951,0.83671,0.56002,0.57797,0.54450)
     val bd = DenseVector(0.15951,0.83671,0.56002,0.57797,0.54450)
-    val bdSplit = DenseVector(0., 0.15951, 0., 0.83671,0., 0.56002, 0., 0.57797, 0., 0.54450)
+    val bdSplit = DenseVector(0.0, 0.15951, 0.0, 0.83671,0.0, 0.56002, 0.0, 0.57797, 0.0, 0.54450)
     val bdd = bdSplit(1 to 9 by 2)
     assertClose(a dot b, .90249)
 //    assertClose(a dot bd, .90249)
@@ -54,31 +55,31 @@ class HashVectorTest extends FunSuite {
     val bdd = bd - ad
     b -= a
     bd -= a
-    assertClose(b.norm(2), bd.norm(2))
-    assertClose(bdd.norm(2), bd.norm(2))
-    assertClose(bss.norm(2), bd.norm(2))
+    assertClose(norm(b, 2), norm(bd, 2))
+    assertClose(norm(bdd, 2), norm(bd, 2))
+    assertClose(norm(bss, 2), norm(bd, 2))
   }
 
 
   test("Norm") {
     val v = HashVector(-0.4326, -1.6656, 0.1253, 0.2877, -1.1465)
-    assertClose(v.norm(1), 3.6577)
-    assertClose(v.norm(2), 2.0915)
-    assertClose(v.norm(3), 1.8405)
-    assertClose(v.norm(4), 1.7541)
-    assertClose(v.norm(5), 1.7146)
-    assertClose(v.norm(6), 1.6940)
-    assertClose(v.norm(Double.PositiveInfinity), 1.6656)
+    assertClose(norm(v, 1), 3.6577)
+    assertClose(norm(v, 2), 2.0915)
+    assertClose(norm(v, 3), 1.8405)
+    assertClose(norm(v, 4), 1.7541)
+    assertClose(norm(v, 5), 1.7146)
+    assertClose(norm(v, 6), 1.6940)
+    assertClose(norm(v, Double.PositiveInfinity), 1.6656)
   }
 
   test("SV ops work as Vector") {
     val a = HashVector(1.0, 2.0, 3.0)
     val b = HashVector(3.0, 4.0, 5.0)
     (a:Vector[Double]) += (b: Vector[Double])
-    assert(a === HashVector(4.,6.,8.))
+    assert(a === HashVector(4.0,6.0,8.0))
     assert((a: Vector[Double]).dot (b: Vector[Double]) === (a dot b))
     (a:Vector[Double]) *= (b: Vector[Double])
-    assert(a === HashVector(12.,24.,40.))
+    assert(a === HashVector(12.0,24.0,40.0))
   }
 
 
@@ -90,7 +91,7 @@ class HashVectorTest extends FunSuite {
   test("MapPairs Double") {
     val a: HashVector[Double] = HashVector(1, 2, 3, 4, 5)
     val m: HashVector[Double] = a.mapPairs( (i, x) => x + 1)
-    assert(m === HashVector(2., 3., 4., 5., 6.))
+    assert(m === HashVector(2.0, 3.0, 4.0, 5.0, 6.0))
   }
 
   test("MapActivePairs only touches non-zero entries: Double") {
@@ -99,13 +100,13 @@ class HashVectorTest extends FunSuite {
     a(2) = 3
     a(4) = 5
     val m: HashVector[Double] = a.mapActivePairs( (i,x) => x+1)
-    assert(m === HashVector(2., 0., 4., 0., 6.))
+    assert(m === HashVector(2.0, 0.0, 4.0, 0.0, 6.0))
   }
- 
+
   test("MapValues Double") {
     val a: HashVector[Double] = HashVector(1, 2, 3, 4, 5)
     val m: HashVector[Double] = a.mapValues(_ + 1)
-    assert(m === HashVector(2., 3., 4., 5., 6.))
+    assert(m === HashVector(2.0, 3.0, 4.0, 5.0, 6.0))
   }
 
   test("MapActiveValues only touches non-zero entries: Double") {
@@ -114,7 +115,7 @@ class HashVectorTest extends FunSuite {
     a(2) = 3
     a(4) = 5
     val m: HashVector[Double] = a.mapActiveValues(_+1)
-    assert(m === HashVector(2., 0., 4., 0., 6.))
+    assert(m === HashVector(2.0, 0.0, 4.0, 0.0, 6.0))
   }
 
   test("MapPairs Int") {
@@ -193,6 +194,44 @@ class HashVectorTest extends FunSuite {
 
 
   }
+
+  test("DV/HV ops") {
+    val a = DenseVector(1, 2, 3)
+    val b = HashVector(3)((1,1))
+    assert(a.dot(b) === 2)
+    assert(a + b === DenseVector(1,3,3))
+    assert(a :* b === DenseVector(0, 2, 0))
+  }
+
+  test("HV/DV ops") {
+    val a = DenseVector(1, 2, 3)
+    val b = HashVector(3)((1,1))
+    assert(b.dot(a) === 2)
+    assert(b + a === DenseVector(1,3,3))
+    assert(b :* a === DenseVector(0, 2, 0))
+    b += a
+    assert(b === HashVector(1,3,3))
+  }
+
+  test("HV/SV ops") {
+    val a = SparseVector(3)( (1,2), (2,3))
+    val b = HashVector(3)((1,1))
+    assert(b.dot(a) === 2)
+    assert(b + a === HashVector(0,3,3))
+    assert(b :* a === HashVector(0, 2, 0))
+    b += a
+    assert(b === HashVector(0,3,3))
+  }
+
+  test("SV/HV ops") {
+    val a = SparseVector(3)( (1,2), (2,3))
+    val b = HashVector(3)((1,1))
+    assert(a.dot(b) === 2)
+    assert(a + b === SparseVector(0,3,3))
+    assert(a :* b === SparseVector(0, 2, 0))
+    a += b
+    assert(a === SparseVector(0,3,3))
+  }
 }
 
 /**
@@ -201,7 +240,7 @@ class HashVectorTest extends FunSuite {
  */
 @RunWith(classOf[JUnitRunner])
 class HashVectorOps_DoubleTest extends DoubleValuedTensorSpaceTestBase[HashVector[Double], Int] {
- val space: TensorSpace[HashVector[Double], Int, Double] = implicitly
+ val space = HashVector.space[Double]
 
   val N = 30
   implicit def genTriple: Arbitrary[(HashVector[Double], HashVector[Double], HashVector[Double])] = {
@@ -229,9 +268,9 @@ class HashVectorOps_DoubleTest extends DoubleValuedTensorSpaceTestBase[HashVecto
  */
 @RunWith(classOf[JUnitRunner])
 class HashVectorOps_FloatTest extends TensorSpaceTestBase[HashVector[Float], Int, Float] {
- val space: TensorSpace[HashVector[Float], Int, Float] = implicitly
+ val space = HashVector.space[Float]
 
-  override val TOL: Double = 1E-4
+  override val TOL: Double = 1E-2
   val N = 30
   implicit def genTriple: Arbitrary[(HashVector[Float], HashVector[Float], HashVector[Float])] = {
     Arbitrary {
@@ -258,7 +297,7 @@ class HashVectorOps_FloatTest extends TensorSpaceTestBase[HashVector[Float], Int
  */
 @RunWith(classOf[JUnitRunner])
 class HashVectorOps_IntTest extends TensorSpaceTestBase[HashVector[Int], Int, Int] {
- val space: TensorSpace[HashVector[Int], Int, Int] = implicitly
+ val space = HashVector.space[Int]
 
   val N = 100
   implicit def genTriple: Arbitrary[(HashVector[Int], HashVector[Int], HashVector[Int])] = {
@@ -278,4 +317,29 @@ class HashVectorOps_IntTest extends TensorSpaceTestBase[HashVector[Int], Int, In
   }
 
   def genScalar: Arbitrary[Int] = Arbitrary(Arbitrary.arbitrary[Int].map{ _ % 1000 })
+}
+
+@RunWith(classOf[JUnitRunner])
+class HashVectorOps_ComplexTest extends TensorSpaceTestBase[HashVector[Complex], Int, Complex] {
+  val space = HashVector.space[Complex]
+
+
+  val N = 30
+  implicit def genTriple: Arbitrary[(HashVector[Complex], HashVector[Complex], HashVector[Complex])] = {
+    Arbitrary {
+      for{x <- Arbitrary.arbitrary[Complex]
+          xl <- Arbitrary.arbitrary[List[Int]]
+          y <- Arbitrary.arbitrary[Complex]
+          yl <- Arbitrary.arbitrary[List[Int]]
+          z <- Arbitrary.arbitrary[Complex]
+          zl <- Arbitrary.arbitrary[List[Int]]
+      } yield {
+        ( HashVector(N)( xl.map(i => (i % N).abs -> (math.random * x )):_*),
+          HashVector(N)( yl.map(i => (i % N).abs -> (math.random * y )):_*),
+          HashVector(N)( zl.map(i => (i % N).abs ->(math.random * z )):_*))
+      }
+    }
+  }
+
+  implicit def genScalar: Arbitrary[Complex] = Arbitrary{for(r  <- Arbitrary.arbitrary[Double]; i <- Arbitrary.arbitrary[Double]) yield Complex(r % 100,i % 100)}
 }

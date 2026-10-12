@@ -14,12 +14,19 @@ package breeze.linalg
  See the License for the specific language governing permissions and
  limitations under the License.
 */
-import breeze.storage.DefaultArrayValue
+
 import java.util
-import breeze.util.{Terminal, ArrayUtil}
-import collection.mutable
-import breeze.math.Semiring
-import breeze.generic.CanMapValues
+
+import breeze.linalg.operators._
+import breeze.linalg.support.CanTraverseValues.ValuesVisitor
+import breeze.linalg.support._
+import breeze.math._
+import breeze.storage.Zero
+import breeze.util.{ArrayUtil, SerializableLogging, Sorting, Terminal}
+
+import scala.collection.mutable
+import scala.reflect.ClassTag
+import scala.{specialized=>spec}
 
 /**
  * A compressed sparse column matrix, as used in Matlab and CSparse, etc.
@@ -29,17 +36,32 @@ import breeze.generic.CanMapValues
  * @author dlwh
  */
 // TODO: maybe put columns in own array of sparse vectors, making slicing easier?
-class CSCMatrix[@specialized(Int, Float, Double) V:DefaultArrayValue] private[linalg] (private var _data: Array[V],
+class CSCMatrix[@spec(Double, Int, Float, Long) V: Zero] private[linalg] (private var _data: Array[V],
                                                                                val rows: Int,
                                                                                val cols: Int,
                                                                                val colPtrs: Array[Int], // len cols + 1
                                                                                private var used : Int,
                                                                                private var _rowIndices: Array[Int]) // len >= used
-  extends Matrix[V] with MatrixLike[V, CSCMatrix[V]] {
+  extends Matrix[V] with MatrixLike[V, CSCMatrix[V]] with Serializable {
+
+  /**
+   * Constructs a [[CSCMatrix]] instance. We don't validate the input data for performance reasons.
+   * So make sure you understand the [[http://en.wikipedia.org/wiki/Sparse_matrix CSC format]] correctly.
+   * Otherwise, please use the factory methods under [[CSCMatrix$]] and [[CSCMatrix$#Builder]] to construct CSC matrices.
+   * @param data active values
+   * @param rows number of rows
+   * @param cols number of columns
+   * @param colPtrs the locations in `data` that start a column
+   * @param rowIndices row indices of the elements in `data`
+   */
+  def this(data: Array[V], rows: Int, cols: Int, colPtrs: Array[Int], rowIndices: Array[Int]) =
+    this(data, rows, cols, colPtrs, data.length, rowIndices)
 
   def rowIndices = _rowIndices
   def data = _data
 
+  // don't delete
+  CSCMatrix.init()
 
   def apply(row: Int, col: Int): V = {
     if(row >= rows || col >= cols || row < 0 || col < 0)
@@ -127,9 +149,7 @@ class CSCMatrix[@specialized(Int, Float, Double) V:DefaultArrayValue] private[li
     util.Arrays.binarySearch(rowIndices, start, end, row)
   }
 
-
-  private def zero = implicitly[DefaultArrayValue[V]].value
-
+  def zero = implicitly[Zero[V]].zero
 
   override def toString(maxLines: Int, maxWidth: Int): String = {
     val buf = new StringBuilder()
@@ -149,18 +169,96 @@ class CSCMatrix[@specialized(Int, Float, Double) V:DefaultArrayValue] private[li
   }
 
   override def toString: String = toString(maxLines = Terminal.terminalHeight - 3)
+
+
+  /** just uses the data from this matrix. No copies are made. designed for temporaries */
+  private[breeze] def use(matrix: CSCMatrix[V]): Unit = {
+    use(matrix.data, matrix.colPtrs, matrix.rowIndices, matrix.used)
+  }
+
+  def use(data: Array[V],colPtrs: Array[Int], rowIndices: Array[Int], used: Int): Unit = {
+    require(colPtrs.length == this.colPtrs.length)
+    require(used >= 0)
+    require(data.length >= used)
+    require(rowIndices.length >= used)
+    this._data = data
+    System.arraycopy(colPtrs,0,this.colPtrs,0,colPtrs.length)
+    this._rowIndices = rowIndices
+    this.used = used
+  }
+
+  def copy: CSCMatrix[V] = {
+    new CSCMatrix[V](ArrayUtil.copyOf(_data, activeSize), rows, cols, colPtrs.clone(), activeSize, _rowIndices.clone)
+  }
+
+  def flatten(view: View=View.Copy): SparseVector[V] = {
+    view match {
+        // This seems kind of silly, since you don't save a ton of time, but for parity with DenseMatrix...
+      case View.Require =>
+        val indices = new Array[Int](data.length)
+        var j = 0
+        var ind = 0
+        while (j < cols) {
+          var ip = colPtrs(j)
+          while (ip < colPtrs(j + 1)) {
+            val i = rowIndices(ip)
+            indices(ind) = i * rows + j
+            ip += 1
+            ind += 1
+          }
+          j += 1
+        }
+        new SparseVector[V](indices,data,activeSize,rows * cols)
+      case View.Copy =>
+        implicit val man = ClassTag[V](data.getClass.getComponentType.asInstanceOf[Class[V]])
+        val sv = SparseVector.zeros[V](rows * cols)
+        var j = 0
+        while (j < cols) {
+          var ip = colPtrs(j)
+          while (ip < colPtrs(j + 1)) {
+            val i = rowIndices(ip)
+            sv(i * cols + j) = data(ip)
+            ip += 1
+          }
+          j += 1
+        }
+        sv
+      case View.Prefer => flatten(View.Require)
+    }
+  }
+
+
+  override def toDenseMatrix(implicit cm: ClassTag[V], zero: Zero[V]): DenseMatrix[V] = {
+    toDense
+  }
+
+  def toDense:DenseMatrix[V] = {
+    implicit val ctg = ClassTag(data.getClass.getComponentType).asInstanceOf[ClassTag[V]]
+    val res = DenseMatrix.zeros[V](rows, cols)
+    var i = 0
+    while (i < cols) {
+      var j = colPtrs(i)
+      while (j < colPtrs(i+1)) {
+        res(rowIndices(j), i) = data(j)
+        j += 1
+      }
+      i += 1
+    }
+    res
+  }
 }
 
-object CSCMatrix extends MatrixConstructors[CSCMatrix] with CSCMatrixOps_Int with CSCMatrixOps_Float with CSCMatrixOps_Double  {
-  def zeros[@specialized(Int, Float, Double) V:ClassManifest:DefaultArrayValue](rows: Int, cols: Int, initialNonzero: Int = 0) = {
+object CSCMatrix extends MatrixConstructors[CSCMatrix]
+                 with CSCMatrixOps with SerializableLogging {
+  def zeros[@specialized(Int, Float, Double) V:ClassTag:Zero](rows: Int, cols: Int, initialNonzero: Int) = {
     new CSCMatrix[V](new Array(initialNonzero), rows, cols, new Array(cols + 1), 0, new Array(initialNonzero))
   }
 
-  def zeros[@specialized(Int, Float, Double) V: ClassManifest : DefaultArrayValue](rows: Int, cols: Int): CSCMatrix[V] = zeros(rows, cols, 0)
+  def zeros[@spec(Double, Int, Float, Long) V: ClassTag : Zero](rows: Int, cols: Int): CSCMatrix[V] = zeros(rows, cols, 0)
 
-  def create[@specialized(Int, Float, Double) V: DefaultArrayValue](rows: Int, cols: Int, data: Array[V]): CSCMatrix[V] = {
-    val z = implicitly[DefaultArrayValue[V]].value
-    implicit val man = ClassManifest.fromClass(data.getClass.getComponentType.asInstanceOf[Class[V]])
+  def create[@spec(Double, Int, Float, Long) V: Zero](rows: Int, cols: Int, data: Array[V]): CSCMatrix[V] = {
+    val z = implicitly[Zero[V]].zero
+    implicit val man = ClassTag[V](data.getClass.getComponentType.asInstanceOf[Class[V]])
     val res = zeros(rows, cols, data.length)
     var i = 0
     for(c <- 0 until cols; r <- 0 until rows) {
@@ -174,8 +272,23 @@ object CSCMatrix extends MatrixConstructors[CSCMatrix] with CSCMatrixOps_Int wit
     res
   }
 
-    implicit def canMapValues[V, R:ClassManifest:DefaultArrayValue:Semiring] = {
-      val z = implicitly[DefaultArrayValue[R]].value
+  class CanCopyCSCMatrix[@spec(Double, Int, Float, Long) V:ClassTag:Zero] extends CanCopy[CSCMatrix[V]] {
+    def apply(v1: CSCMatrix[V]) = {
+      v1.copy
+    }
+  }
+
+  implicit def canCopySparse[@spec(Double, Int, Float, Long) V: ClassTag: Zero] = new CanCopyCSCMatrix[V]
+
+  implicit def canCreateZerosLike[V:ClassTag:Zero]: CanCreateZerosLike[CSCMatrix[V], CSCMatrix[V]] =
+    new CanCreateZerosLike[CSCMatrix[V], CSCMatrix[V]] {
+      def apply(v1: CSCMatrix[V]): CSCMatrix[V] = {
+        zeros[V](v1.rows,v1.cols)
+      }
+    }
+
+  implicit def canMapValues[V, R:ClassTag:Zero:Semiring]:CanMapValues[CSCMatrix[V], V, R, CSCMatrix[R]] = {
+    val z = implicitly[Zero[R]].zero
     new CanMapValues[CSCMatrix[V],V,R,CSCMatrix[R]] {
       override def map(from : CSCMatrix[V], fn : (V=>R)) = {
         val fz = fn(from.zero)
@@ -221,61 +334,144 @@ object CSCMatrix extends MatrixConstructors[CSCMatrix] with CSCMatrixOps_Int wit
     }
   }
 
+  implicit def handholdCMV[T] = new CanMapValues.HandHold[CSCMatrix[T], T]
+
+  implicit def canIterateValues[V]:CanTraverseValues[CSCMatrix[V], V] = {
+    new CanTraverseValues[CSCMatrix[V],V] {
+
+      def isTraversableAgain(from: CSCMatrix[V]): Boolean = true
+
+      /** Iterates all key-value pairs from the given collection. */
+      def traverse(from: CSCMatrix[V], fn: ValuesVisitor[V]): Unit = {
+        fn.zeros(from.size - from.activeSize, from.zero)
+        fn.visitArray(from.data, 0, from.activeSize, 1)
+      }
+    }
+  }
+
+
+
+
+  implicit def canTranspose[V:ClassTag:Zero:Semiring]: CanTranspose[CSCMatrix[V], CSCMatrix[V]] = {
+    new CanTranspose[CSCMatrix[V], CSCMatrix[V]] {
+      def apply(from: CSCMatrix[V]) = {
+        val transposedMtx = new CSCMatrix.Builder[V](from.cols, from.rows, from.activeSize)
+
+        var j = 0
+        while(j < from.cols) {
+          var ip = from.colPtrs(j)
+          while(ip < from.colPtrs(j+1)) {
+            val i = from.rowIndices(ip)
+            transposedMtx.add(j, i, from.data(ip))
+            ip += 1
+          }
+          j += 1
+        }
+        // this doesn't hold if there are zeros in the matrix
+//        assert(transposedMtx.activeSize == from.activeSize,
+//          s"We seem to have lost some elements?!?! ${transposedMtx.activeSize} ${from.activeSize}")
+        transposedMtx.result(false, false)
+      }
+    }
+  }
+
+  implicit def canTransposeComplex: CanTranspose[CSCMatrix[Complex], CSCMatrix[Complex]] = {
+    new CanTranspose[CSCMatrix[Complex], CSCMatrix[Complex]] {
+      def apply(from: CSCMatrix[Complex]) = {
+        val transposedMtx = CSCMatrix.zeros[Complex](from.cols, from.rows)
+
+        var j = 0
+        while(j < from.cols) {
+          var ip = from.colPtrs(j)
+          while(ip < from.colPtrs(j+1)) {
+            val i = from.rowIndices(ip)
+            transposedMtx(j, i) = from.data(ip).conjugate
+            ip += 1
+          }
+          j += 1
+        }
+        transposedMtx
+      }
+    }
+  }
+
 
   /**
    * This is basically an unsorted coordinate matrix.
    * @param initNnz initial number of nonzero entries
    */
-  class Builder[@specialized(Int, Float, Double) T:ClassManifest:Semiring:DefaultArrayValue](rows: Int, cols: Int, initNnz: Int = 16) {
+  class Builder[@spec(Double, Int, Float, Long) T:ClassTag:Semiring:Zero](rows: Int, cols: Int, initNnz: Int = 16) {
     private def ring = implicitly[Semiring[T]]
+    private def zero = implicitly[Zero[T]]
+
     def add(r: Int, c: Int, v: T) {
-      rs += r
-      cs += c
-      vs += v
+      if(v != 0) {
+        numAdded += 1
+        vs += v
+        indices += (c.toLong << 32) | (r & 0xFFFFFFFFL)
+      }
     }
 
-    private val rs = new mutable.ArrayBuilder.ofInt()
-    rs.sizeHint(initNnz)
-    private val cs = new mutable.ArrayBuilder.ofInt()
-    cs.sizeHint(initNnz)
-    private val vs = implicitly[ClassManifest[T]].newArrayBuilder()
-    vs.sizeHint(initNnz)
+    // we pack rows and columns into a single long. (most significant bits get the column, so columns are the major axis)
+    private val indices = new mutable.ArrayBuilder.ofLong()
+    private val vs = mutable.ArrayBuilder.make[T]()
+    private var numAdded = 0
+    def activeSize = numAdded
 
-    def result():CSCMatrix[T] = {
-      val rs = this.rs.result()
-      val cs = this.cs.result()
+    def sizeHint(nnz: Int) = {
+      indices.sizeHint(nnz)
+      vs.sizeHint(nnz)
+    }
+    sizeHint(initNnz)
+
+    def result:CSCMatrix[T] = result(false, false)
+
+    private def rowFromIndex(idx: Long) = idx.toInt
+    private def colFromIndex(idx: Long) = (idx >>> 32).toInt
+
+    def result(keysAlreadyUnique: Boolean = false, keysAlreadySorted: Boolean = false):CSCMatrix[T] = {
+      val indices = this.indices.result()
       val vs = this.vs.result()
       // at most this many nnz
-      val nnz = rs.length
+      val nnz = indices.length
+      val outCols = new Array[Int](cols+1)
 
-      val order = sortedIndices(rs, cs)
+      if(nnz == 0) {
+        return new CSCMatrix(vs, rows, cols, outCols, 0, Array())
+      }
+
+      val order: Array[Int] = if(keysAlreadySorted) {
+        VectorBuilder.range(nnz)
+      } else {
+        sortedIndices(indices)
+      }
 
       val outRows = new Array[Int](nnz)
-      val outCols = new Array[Int](cols+1)
       val outData = new Array[T](nnz)
 
-      if (cs.length > 0) {
-        outRows(0) = rs(order(0))
-        outData(0) = vs(order(0))
-      }
+      outRows(0) = rowFromIndex(indices(order(0)))
+      outData(0) = vs(order(0))
+
       var outDataIndex = 0
       var i = 1
-      var lastCol = cs(order(0))
+      var lastCol = colFromIndex(indices(order(0)))
       while (i < nnz) {
-        val colsEqual = cs(order(i)) == lastCol
-
-        if (colsEqual && rs(order(i)) == rs(order(i-1))) {
+        val index = indices(order(i))
+        val col = colFromIndex(index)
+        val colsEqual = col == lastCol
+        val row = rowFromIndex(index)
+        if (colsEqual && row == rowFromIndex(indices(order(i-1)))) {
           // TODO: might need to codegen to make this fast.
           outData(outDataIndex) = ring.+(outData(outDataIndex), vs(order(i)))
         } else {
           outDataIndex += 1
-          outRows(outDataIndex) = rs(order(i))
+          outRows(outDataIndex) = row
           outData(outDataIndex) = vs(order(i))
         }
 
-        // we need the outCols array to point to the
+        // we need to pad the outCols array with zeros until we reach the next non-zero column
         if(!colsEqual) {
-          while(lastCol < cs(order(i))) {
+          while(lastCol < col) {
             outCols(lastCol+1) = outDataIndex
             lastCol += 1
           }
@@ -291,15 +487,60 @@ object CSCMatrix extends MatrixConstructors[CSCMatrix] with CSCMatrixOps_Int wit
       }
 
       val out = new CSCMatrix[T](outData, rows, cols, outCols, outDataIndex, outRows)
-      out.compact()
+      if(!keysAlreadyUnique)
+        out.compact()
       out
     }
 
-    // returns indices of a lexicgraphic sort of cs then rs
-    private def sortedIndices(rs: Array[Int], cs: Array[Int]) = {
-      Array.range(0, rs.length).sortWith { (i, j) =>
-        (cs(i) < cs(j))  || (cs(i) == cs(j) && rs(i) < rs(j))
-      }
+    // returns indices of a lexicgraphic sort of the indices (columns major, rows minor)
+    private def sortedIndices(indices: Array[Long]) = {
+      val sortedOffsets = Sorting.indexSort(VectorBuilder.range(indices.length), 0, indices.length, indices)
+//      val qq = Array.range(0, rs.length).sortWith { (i, j) =>
+//        (cs(i) < cs(j))  || (cs(i) == cs(j) && rs(i) < rs(j))
+//      }
+//
+//      assert(util.Arrays.equals(qq.map(indices), sortedOffsets.map(indices)), qq.map(indices).deep + " " + sortedOffsets.map(indices).deep)
+
+      sortedOffsets
     }
   }
+
+  object Builder {
+    def fromMatrix[@spec(Double, Int, Float, Long) T:ClassTag:Semiring:Zero](matrix: CSCMatrix[T]):Builder[T] = {
+      val bldr = new Builder[T](matrix.rows, matrix.cols, matrix.activeSize)
+      var c = 0
+      while(c < matrix.cols) {
+        var rr = matrix.colPtrs(c)
+        val rrlast = matrix.colPtrs(c+1)
+        while (rr < rrlast) {
+          val r = matrix.rowIndices(rr)
+          bldr.add(r, c, matrix.data(rr))
+          rr += 1
+        }
+        c += 1
+      }
+
+      bldr
+    }
+  }
+
+  implicit def canDim[E] = new dim.Impl[CSCMatrix[E], (Int,Int)] {
+    def apply(v: CSCMatrix[E]): (Int, Int) = (v.rows,v.cols)
+  }
+
+  object FrobeniusInnerProductCSCMatrixSpace {
+    implicit def space[S: Field : ClassTag] = {
+      val norms = EntrywiseMatrixNorms.make[CSCMatrix[S], S]
+      import norms._
+      MutableFiniteCoordinateField.make[CSCMatrix[S], (Int, Int), S]
+    }
+  }
+
+  @noinline
+  private def init() = {}
 }
+
+
+
+
+

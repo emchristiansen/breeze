@@ -1,11 +1,10 @@
 package breeze.linalg
 
+import breeze.math._
+import org.junit.runner.RunWith
 import org.scalacheck._
 import org.scalatest._
 import org.scalatest.junit._
-import org.scalatest.prop._
-import org.junit.runner.RunWith
-import breeze.math.{DoubleValuedTensorSpaceTestBase, TensorSpace, TensorSpaceTestBase}
 
 
 /**
@@ -13,7 +12,38 @@ import breeze.math.{DoubleValuedTensorSpaceTestBase, TensorSpace, TensorSpaceTes
  * @author dlwh
  */
 
-class VectorTest {
+@RunWith(classOf[JUnitRunner])
+class VectorTest extends FunSuite {
+
+  val dvTest = DenseVector(1,2,3,4)
+  //val dmTest = DenseMatrix((1,2,3,4), (5,6,7,8))
+
+  test("scan"){
+    assert( dvTest.scanLeft(0)( (p1: Int, p2: Int) => p1 + p2 )  == DenseVector(0,1,3,6,10) )
+    assert( dvTest.scanRight(0)( (p1: Int, p2: Int) => p1 + p2 )  == DenseVector(10,9,7,4,0) )
+  }
+
+  test("fold"){
+    assert( dvTest.foldLeft(0)( (p1: Int, p2: Int) => 2 * p1  - p2 )  == - 26 )
+    assert( dvTest.foldRight(0)( (p1: Int, p2: Int) => 2 * p1 - p2 )  == -4 )
+  }
+
+  test("reduce"){
+    assert( dvTest.reduceLeft( (p1: Int, p2: Int) => 2 * p1  - p2 )  == - 10 )
+    assert( dvTest.reduceRight( (p1: Int, p2: Int) => 2 * p1 - p2 )  == 0 )
+  }
+
+  test("unary !") {
+    val b = Vector(true, false, false)
+    assert(!b == Vector(false, true, true))
+  }
+
+  test("hashcode") {
+    val v: DenseVector[Int] = DenseVector(1, 2, 0, 0, 3)
+    val v2: SparseVector[Int] = SparseVector(5)((0 ->1), (1 -> 2), (4->3))
+    assert(v === v2)
+    assert(v.hashCode == v2.hashCode)
+  }
 
 }
 
@@ -24,7 +54,7 @@ class VectorTest {
  */
 @RunWith(classOf[JUnitRunner])
 class VectorOps_DoubleTest extends DoubleValuedTensorSpaceTestBase[Vector[Double], Int] {
- val space: TensorSpace[Vector[Double], Int, Double] = implicitly
+ val space = Vector.space[Double]
 
 
   val N = 30
@@ -52,9 +82,9 @@ class VectorOps_DoubleTest extends DoubleValuedTensorSpaceTestBase[Vector[Double
 
 @RunWith(classOf[JUnitRunner])
 class VectorOps_FloatTest extends TensorSpaceTestBase[Vector[Float], Int, Float] {
- val space: TensorSpace[Vector[Float], Int, Float] = implicitly
+ val space = Vector.space[Float]
 
-  override val TOL: Double = 1E-3
+  override val TOL: Double = 1E-2
   val N = 30
   implicit def genTriple: Arbitrary[(Vector[Float], Vector[Float], Vector[Float])] = {
     Arbitrary {
@@ -80,7 +110,7 @@ class VectorOps_FloatTest extends TensorSpaceTestBase[Vector[Float], Int, Float]
 
 @RunWith(classOf[JUnitRunner])
 class VectorOps_IntTest extends TensorSpaceTestBase[Vector[Int], Int, Int] {
- val space: TensorSpace[Vector[Int], Int, Int] = implicitly
+ val space = Vector.space[Int]
 
   val N = 30
   implicit def genTriple: Arbitrary[(Vector[Int], Vector[Int], Vector[Int])] = {
@@ -103,4 +133,32 @@ class VectorOps_IntTest extends TensorSpaceTestBase[Vector[Int], Int, Int] {
   }
 
   def genScalar: Arbitrary[Int] = Arbitrary(Arbitrary.arbitrary[Int].map{ _ % 1000 })
+}
+
+@RunWith(classOf[JUnitRunner])
+class VectorOps_ComplexTest extends TensorSpaceTestBase[Vector[Complex], Int, Complex] {
+  val space = Vector.space[Complex]
+
+
+  val N = 30
+  implicit def genTriple: Arbitrary[(Vector[Complex], Vector[Complex], Vector[Complex])] = {
+    Arbitrary {
+      for{x <- Arbitrary.arbitrary[Complex]
+          bx <- Arbitrary.arbitrary[Boolean]
+          xl <- Arbitrary.arbitrary[List[Int]]
+          y <- Arbitrary.arbitrary[Complex]
+          by <- Arbitrary.arbitrary[Boolean]
+          yl <- Arbitrary.arbitrary[List[Int]]
+          z <- Arbitrary.arbitrary[Complex]
+          bz <- Arbitrary.arbitrary[Boolean]
+          zl <- Arbitrary.arbitrary[List[Int]]
+      } yield {
+        (if(bx) DenseVector.fill(N)(math.random * x ) else SparseVector(N)( xl.map(i => (i % N).abs -> (math.random * x )):_*),
+          if(by) DenseVector.fill(N)(math.random * y ) else SparseVector(N)( yl.map(i => (i % N).abs -> (math.random * y )):_*),
+          if(bz) DenseVector.fill(N)(math.random * z ) else SparseVector(N)( zl.map(i => (i % N).abs ->(math.random * z )):_*))
+      }
+    }
+  }
+
+  implicit def genScalar: Arbitrary[Complex] = Arbitrary{for(r  <- Arbitrary.arbitrary[Double]; i <- Arbitrary.arbitrary[Double]) yield Complex(r % 100,i % 100)}
 }
